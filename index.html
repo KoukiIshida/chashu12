@@ -392,10 +392,10 @@ function pname(pid){ const p=gs.players[pid]; return p?p.name:'（退出）'; }
 function connectedPids(){ return gs.order.filter(pid=>gs.players[pid] && connected.has(pid)); }
 function qById(id){ return appData.questions.find(q=>q.id===id); }
 function curQ(){ return gs.round ? qById(gs.round.qid) : null; }
+/* 例題（「出題する」の1問目）はルール説明の画像紹介だけに使い、出題は第1問から */
 function labelFor(i){
-  if(i===0) return '例題';
-  const real=gs.qids.length-1;
-  return i===gs.qids.length-1 ? `第${i}問（最終問題）` : `第${i}問 / 全${real}問`;
+  const real=gs.qids.length;
+  return i===real-1 ? `第${i+1}問（最終問題）` : `第${i+1}問 / 全${real}問`;
 }
 function totalScore(pid){ return gs.rounds.filter(r=>!r.practice).reduce((a,r)=>a+(r.pts[pid]||0),0); }
 /** 同点は同順位 */
@@ -553,7 +553,7 @@ async function startGame(withRule){
   if(connectedPids().length<MIN_PLAYERS){ alert(`参加者が${MIN_PLAYERS}人以上必要です`); return; }
   await loadAppData();
   const qs=appData.questions.filter(q=>q.include && q.img && answerList(q).length);
-  if(!qs.length){ alert('出題できる問題がありません。\n管理ページで、問題画像と正解を登録して「出題する」にチェックを入れてください。'); return; }
+  if(qs.length<2){ alert('出題できる問題がありません。\n「出題する」の1問目は例題（ルール説明の画像紹介用）なので、例題のほかに1問以上、問題画像と正解を登録して「出題する」にチェックを入れてください。'); return; }
   // 配置が未計算の問題があれば計算して保存（同じ画像なら毎回同じ配置）
   const need=qs.filter(q=>!layoutValid(q));
   if(need.length){
@@ -566,7 +566,7 @@ async function startGame(withRule){
     ov.classList.remove('active');
   }
   gs.settings=JSON.parse(JSON.stringify(appData.settings));
-  gs.qids=qs.map(q=>q.id); gs.qi=0; gs.rounds=[]; gs.round=null; gs.timer=null;
+  gs.exampleId=qs[0].id; gs.qids=qs.slice(1).map(q=>q.id); gs.qi=0; gs.rounds=[]; gs.round=null; gs.timer=null;
   const hasRule=appData.ruleSlides.some(s=>s.img || s.groups.some(g=>stripHtml(g)));
   gs.ruleDemo=null; gs.ruleDemoDone=false;
   if(withRule && hasRule){ gs.phase='rule'; gs.ruleSlideIndex=0; gs.ruleRevealIndex=0; }
@@ -574,7 +574,7 @@ async function startGame(withRule){
   commit();
 }
 /* ----- ルール説明中の「例題の画像紹介」（通常の画像 → 1倍 → 2〜12倍まとめて） ----- */
-function exampleQ(){ const q=gs.qids.length ? qById(gs.qids[0]) : null; return q && layoutValid(q) ? q : null; }
+function exampleQ(){ const q=gs.exampleId ? qById(gs.exampleId) : null; return q && layoutValid(q) ? q : null; }
 /** 画像紹介を入れるルール説明のページ番号（0始まり。入れない時は -1） */
 function demoSlideIndex(){
   const n=appData.ruleSlides.length, a=S().demoAfter;
@@ -607,7 +607,7 @@ function startTimer(kind, sec){ gs.timer={ id:uid(), kind, endsAt:Date.now()+sec
 function startSelect(){
   if(gs.phase!=='ready') return;
   const qid=gs.qids[gs.qi];
-  gs.round={ id:uid(), qid, label:labelFor(gs.qi), practice:gs.qi===0, picks:{}, correct:{}, wrong:{}, answerStartAt:null, revealStep:0, recorded:false };
+  gs.round={ id:uid(), qid, label:labelFor(gs.qi), practice:false, picks:{}, correct:{}, wrong:{}, answerStartAt:null, revealStep:0, recorded:false };
   hostOverlayK=0;
   gs.phase='select'; startTimer('select', S().selectSec);
   commit();
@@ -791,7 +791,7 @@ function renderHost(){
             : '<p class="muted">参加待ち…</p>'}</div>
         </div>
       </div>
-      <p class="muted">出題する問題：${qn}問（例題1問＋本番${Math.max(0,qn-1)}問）／倍率を決める時間 ${s.selectSec}秒／解答時間 ${s.answerSec}秒</p>
+      <p class="muted">出題する問題：${Math.max(0,qn-1)}問（ほかに例題1問をルール説明で紹介）／倍率を決める時間 ${s.selectSec}秒／解答時間 ${s.answerSec}秒</p>
       <div class="btnbar">
         <button class="primary big" data-act="start" data-enter ${n>=MIN_PLAYERS?'':'disabled'}>ゲームスタート ▶</button>
         <button class="ghost" data-act="start-norule" ${n>=MIN_PLAYERS?'':'disabled'}>ルール説明をとばして開始</button>
@@ -809,7 +809,7 @@ function renderHost(){
       : `<div class="demo-grid">${Array.from({length:MAX_MUL-1},(_,i)=>`<figure><img class="zoomable" data-demo-k="${i+2}">${i+2}倍（${(i+2)*PER_MUL}枚）</figure>`).join('')}</div>`}
       <div class="btnbar">
         <button data-act="rule-prev">◀ 前へ</button>
-        <button class="primary big" data-act="rule-next" data-enter>${isLast?'▶ 例題へ':'次へ ▶'}</button>
+        <button class="primary big" data-act="rule-next" data-enter>${isLast?'▶ 第1問へ':'次へ ▶'}</button>
         <button class="ghost small" data-act="rule-skip">ルールをとばす</button>
       </div></div>`;
   }
@@ -822,13 +822,13 @@ function renderHost(){
       <div class="rule-display">${slide.img?`<img class="rule-img" src="${slide.img}">`:''}${slide.groups.map((g,gi)=>`<div style="${gi<=ri?'':'visibility:hidden'}">${ruleText(g)}</div>`).join('')}</div>
       <div class="btnbar">
         <button data-act="rule-prev" ${si===0&&ri===0?'disabled':''}>◀ 前へ</button>
-        <button class="primary big" data-act="rule-next" data-enter>${isLast?'▶ 例題へ':'次へ ▶'}</button>
+        <button class="primary big" data-act="rule-next" data-enter>${isLast?'▶ 第1問へ':'次へ ▶'}</button>
         <button class="ghost small" data-act="rule-skip">ルールをとばす</button>
       </div></div>`;
   }
   else if(ph==='ready'){
     body=`<div class="stage">
-      <h2>${esc(labelFor(gs.qi))}${gs.qi===0?'（練習・得点なし）':''}</h2>
+      <h2>${esc(labelFor(gs.qi))}</h2>
       <p style="font-size:24px">チャーシューを何倍にするか、スマホで決めてください！<br><span class="muted" style="font-size:18px">1倍〜12倍（倍率 × ${PER_MUL}枚）・正解すると倍率がそのまま得点</span></p>
       <div class="btnbar"><button class="primary big" data-act="select" data-enter>🥩 倍率を決める（${s.selectSec}秒）</button></div>
       ${gs.rounds.some(x=>!x.practice)?`<div class="btnbar"><button class="small ghost" data-act="final">🏁 ここで終了して結果発表</button></div>`:''}
@@ -847,17 +847,18 @@ function renderHost(){
   else if(ph==='selected'){
     body=`<div class="stage">
       <h2>🥩 倍率が決まりました！</h2>
-      ${tilesHtml('selected')}
+      <p class="muted" style="font-size:18px">誰が何倍を選んだかは、正解発表で分かります</p>
+      ${tilesHtml('select')}
       <div class="btnbar"><button class="primary big" data-act="answer" data-enter>▶ 解答開始（${s.answerSec}秒）</button></div>
     </div>`;
   }
   else if(ph==='answer'||ph==='answered'){
-    const n=connectedPids().length, okn=Object.keys(r.correct).length;
+    // 解答中・解答終了後も、誰が正解したか・誰が何倍かはホスト画面に出さない（正解発表で公開）
+    const n=connectedPids().length;
     body=`<div class="stage">
       ${q&&q.text?`<div class="qtext">${esc(q.text)}</div>`:''}
       ${ph==='answer' ? timerBlock('解答時間') : '<div class="timer zero" style="font-size:64px">⏰ 解答終了！</div>'}
-      <p style="font-size:22px;font-weight:800">正解 ${okn}人 <span class="muted">/ ${n}人</span></p>
-      ${tilesHtml('answer')}
+      <p style="font-size:22px;font-weight:800">${ph==='answer' ? `${n}人が解答中…` : 'このあと正解発表！'}</p>
       <div class="btnbar">
         ${ph==='answer' ? '<button class="ghost" data-act="close-answer">解答を締め切る</button>'
                         : '<button class="primary big" data-act="reveal" data-enter>🎉 正解発表へ</button>'}
@@ -1136,7 +1137,7 @@ async function initAdmin(){
         <span class="muted" style="font-size:13px">差し替える場合は背景が透明なPNGを選んでください。</span><br>
         ${appData.chashuImg?'<button class="small ghost" data-act="chashu-default" style="margin-top:6px">最初の画像に戻す</button>':''}</div></div></div>
     <div class="card"><h2>問題一覧</h2>
-      <p class="muted" style="margin-top:-6px">問題画像はどのサイズ・縦横比でも登録できます。画像を登録すると、1倍〜12倍のチャーシューを画像全体にまぶす配置を自動で決めます（同じ画像・同じ倍率なら、部屋を作り直しても必ず同じ配置です）。「出題する」にチェックした問題の1問目は例題（得点なし）になります。</p>
+      <p class="muted" style="margin-top:-6px">問題画像はどのサイズ・縦横比でも登録できます。画像を登録すると、1倍〜12倍のチャーシューを画像全体にまぶす配置を自動で決めます（同じ画像・同じ倍率なら、部屋を作り直しても必ず同じ配置です）。「出題する」にチェックした問題の1問目は<b>例題</b>で、ルール説明で画像（通常→1倍→2〜12倍）を紹介するだけに使います（解答はしません）。2問目からが第1問です。</p>
       <div id="q-list"></div>
       <button data-act="q-add">＋ 問題を追加</button></div>
     <div class="card"><h2>出題設定の最終確認（実際の出題順）</h2><div id="confirm-list"></div></div>
@@ -1222,7 +1223,7 @@ function renderQuestions(){
 function renderConfirm(){
   const inc=appData.questions.filter(q=>q.include);
   document.getElementById('confirm-list').innerHTML = inc.length ? inc.map((q,i)=>`<div class="confirm-row">
-      <b style="width:110px">${i===0?'<span class="tag practice">例題</span>':`第${i}問${i===inc.length-1&&i>0?'（最終）':''}`}</b>
+      <b style="width:110px">${i===0?'<span class="tag practice">例題</span> <span class="muted" style="font-size:12px;font-weight:400">画像紹介のみ</span>':`第${i}問${i===inc.length-1&&i>0?'（最終）':''}`}</b>
       ${q.img?`<img src="${q.img}">`:'<span class="err-text">画像なし</span>'}
       <span style="flex:1">${esc(q.text||'')}　<span class="muted">正解表記：${esc(answerLabel(q)||'（未登録）')}／採点用：${esc(answerList(q).join('・')||'（未登録）')}</span></span>
       ${q.done?'<span class="tag ng">出題済み</span>':''}
@@ -1376,7 +1377,7 @@ function renderDemoSelect(){
   const n=appData.ruleSlides.length;
   let cur=sel.options.length ? toInt(sel.value) : appData.settings.demoAfter;
   if(isNaN(cur) || cur>n) cur=-1;
-  const opts=[[-1,'ルール説明の最後（例題の直前）'], ...Array.from({length:Math.max(0,n-1)},(_,i)=>[i+1,`ルール説明のページ${i+1}の後`]), [0,'入れない']];
+  const opts=[[-1,'ルール説明の最後（第1問の直前）'], ...Array.from({length:Math.max(0,n-1)},(_,i)=>[i+1,`ルール説明のページ${i+1}の後`]), [0,'入れない']];
   sel.innerHTML=opts.map(([v,t])=>`<option value="${v}" ${v===cur?'selected':''}>${t}</option>`).join('');
 }
 function renderRuleSlidesEditor(){
